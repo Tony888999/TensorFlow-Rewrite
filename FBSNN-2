@@ -1,0 +1,118 @@
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+
+class BaseNeuralNetwork(tf.keras.Model):
+    def __init__(self, layers):
+        super().__init__()
+        self.layers_list = []
+        for i in range(len(layers) - 1):
+            activation = tf.sin if i < len(layers) - 2 else None
+            self.layers_list.append(
+                tf.keras.layers.Dense(
+                    units=layers[i + 1],
+                    activation=activation,
+                    kernel_initializer=tf.keras.initializers.GlorotNormal(),
+                    bias_initializer=tf.zeros_initializer()
+                )
+            )
+
+    def call(self, inputs, training=False):
+        x = inputs
+        for layer in self.layers_list:
+            x = layer(x)
+        return x
+
+
+class FBSNNBase:
+    def __init__(self, Xi, T, M, N, D, layers):
+        self.Xi = tf.convert_to_tensor(Xi.astype(np.float32))
+        self.T = T
+        self.M = M
+        self.N = N
+        self.D = D
+        self.model = BaseNeuralNetwork(layers)
+        self.optimizer = tf.keras.optimizers.Adam()
+
+    def net_u(self, t, X):
+        with tf.GradientTape(persistent=True) as tape:
+            tape.watch(X)
+            u = self.model(tf.concat([t, X], axis=1))
+        Du = tape.gradient(u, X)
+        del tape
+        return u, Du
+
+    def loss_function(self, t, W):
+        loss = 0
+        X_list, Y_list = [], []
+        M = tf.shape(t)[0]
+        t0, W0 = t[:, 0, :], W[:, 0, :]
+        X0 = tf.tile(self.Xi, [M, 1])
+        Y0, Z0 = self.net_u(t0, X0)
+        X_list.append(X0)
+        Y_list.append(Y0)
+
+        for n in range(self.N):
+            t1, W1 = t[:, n + 1, :], W[:, n + 1, :]
+            dt, dW = t1 - t0, W1 - W0
+            X1 = X0 + Z0 * dW
+            Y1_tilde = Y0 + 0.5 * tf.reduce_sum(Z0 ** 2, axis=1, keepdims=True) * dt + tf.reduce_sum(Z0 * dW, axis=1, keepdims=True)
+            Y1, Z1 = self.net_u(t1, X1)
+            loss += tf.reduce_mean(tf.square(Y1 - Y1_tilde))
+            t0, W0, X0, Y0, Z0 = t1, W1, X1, Y1, Z1
+            X_list.append(X0)
+            Y_list.append(Y0)
+
+        X = tf.stack(X_list, axis=1)
+        Y = tf.stack(Y_list, axis=1)
+        return loss, X, Y, Y_list[0]
+
+    def fetch_minibatch(self):
+        dt = self.T / self.N
+        t = np.linspace(0, self.T, self.N + 1)
+        t = np.tile(t.reshape(1, -1, 1), (self.M, 1, 1)).astype(np.float32)
+        dW = np.sqrt(dt) * np.random.randn(self.M, self.N + 1, self.D).astype(np.float32)
+        dW[:, 0, :] = 0
+        W = np.cumsum(dW, axis=1)
+        return t, W
+
+    def train(self, N_Iter, learning_rate_schedule=None):
+        for it in range(N_Iter):
+            if learning_rate_schedule is not None:
+                lr = learning_rate_schedule(it)
+                self.optimizer.learning_rate.assign(lr)
+
+            t_batch, W_batch = self.fetch_minibatch()
+
+            with tf.GradientTape() as tape:
+                loss_value, _, _, Y0_pred = self.loss_function(t_batch, W_batch)
+
+            grads = tape.gradient(loss_value, self.model.trainable_variables)
+            self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
+
+            if it % 10 == 0:
+                print(f'It: {it}, Loss: {loss_value.numpy():.3e}, Y0: {Y0_pred.numpy().mean():.3f}, Learning Rate: {self.optimizer.learning_rate.numpy():.1e}')
+
+    def predict(self, Xi_star, t_star, W_star):
+        Xi_star = Xi_star.astype(np.float32)
+        t_star = t_star.astype(np.float32)
+        W_star = W_star.astype(np.float32)
+        _, X_pred, Y_pred, _ = self.loss_function(t_star, W_star)
+        return X_pred.numpy(), Y_pred.numpy()
+
+    @abstractmethod
+    def phi_tf(self, t, X, Y, Z):
+        pass
+
+    @abstractmethod
+    def g_tf(self, X):
+        pass
+
+    @abstractmethod
+    def mu_tf(self, t, X, Y, Z):
+        pass
+
+    @abstractmethod
+    def sigma_tf(self, t, X, Y):
+        pass
