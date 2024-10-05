@@ -1,0 +1,70 @@
+# Define the AllenCahn class
+class AllenCahn(FBSNN):
+    def __init__(self, Xi, T, M, N, D, layers):
+        super().__init__(Xi, T, M, N, D, layers)
+
+    def phi_tf(self, t, X, Y, Z):
+        return -Y + tf.pow(Y, 3)
+
+    def g_tf(self, X):
+        return 1.0 / (2.0 + 0.4 * tf.reduce_sum(tf.square(X), axis=1, keepdims=True))
+
+    def mu_tf(self, t, X, Y, Z):
+        return tf.zeros_like(X)
+
+    def sigma_tf(self, t, X, Y):
+        batch_size = tf.shape(X)[0]
+        D = tf.shape(X)[1]
+        return tf.eye(D, batch_shape=[batch_size])
+
+if __name__ == "__main__":
+    M = 100  # number of trajectories (batch size)
+    N = 15   # number of time snapshots
+    D = 20   # number of dimensions
+
+    layers = [D + 1] + 4 * [256] + [1]
+
+    T = 0.3
+    Xi = np.zeros([1, D], dtype=np.float32)
+
+    # Define the learning rate schedule
+    boundaries = [20000, 50000, 80000]
+    values = [1e-3, 1e-4, 1e-5, 1e-6]
+    learning_rate_fn = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries, values)
+
+    # Create an optimizer with the learning rate schedule
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate_fn)
+
+    # Initialize the model
+    model = AllenCahn(Xi, T, M, N, D, layers)
+
+    # Assign the optimizer with the learning rate schedule to the model
+    model.optimizer = optimizer
+
+    # Total number of iterations
+    N_Iter = 50
+
+    # Training
+    model.train(N_Iter)
+
+    # Fetch test data
+    t_test, W_test = model.fetch_minibatch()
+
+    # Make predictions
+    X_pred, Y_pred = model.predict(Xi, t_test, W_test)
+
+    samples = 5
+
+    Y_test_terminal = 1.0 / (2.0 + 0.4 * np.sum(X_pred[:, -1, :] ** 2, axis=1, keepdims=True))
+
+    plt.figure()
+    for i in range(samples):
+        plt.plot(t_test[i, :, 0], Y_pred[i, :, 0], 'b')
+    plt.plot(t_test[0, :, 0], Y_pred[0, :, 0], 'b', label='Learned $u(t,X_t)$')
+    plt.plot(t_test[:samples, -1, 0], Y_test_terminal[:samples, 0], 'ks', label='$Y_T = u(T,X_T)$')
+    plt.plot([0], [0.30879], 'ko', label='$Y_0 = u(0,X_0)$')
+    plt.xlabel('$t$')
+    plt.ylabel('$Y_t = u(t,X_t)$')
+    plt.title('20-dimensional Allen-Cahn')
+    plt.legend()
+    plt.show()
