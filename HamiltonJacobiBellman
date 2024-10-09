@@ -1,5 +1,5 @@
 # Define the HamiltonJacobiBellman class
-class HamiltonJacobiBellman(FBSNN):
+class HamiltonJacobiBellman(FBSNNBase):
     def __init__(self, Xi, T, M, N, D, layers):
         super().__init__(Xi, T, M, N, D, layers)
 
